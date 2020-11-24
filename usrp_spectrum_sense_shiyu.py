@@ -3,7 +3,7 @@
 # Copyright 2005,2007,2011 Free Software Foundation, Inc.
 #
 # This file is part of GNU Radio
-# min_freq设置为想观察的中心频率减去(3/8*sample_rate),max_freq的设置没有什么意义,但必须把他设置为大于min_freq+(3/4*sample_rate),小于max_freq+(9/8*sample_rate)
+#
 # GNU Radio is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 3, or (at your option)
@@ -36,7 +36,7 @@ import threading
 from datetime import datetime
 import time
 
-sys.stderr.write("Warning: this may have issues on some machines+Python version combinations to seg fault due to the callback in bin_statitics.\n\n")
+sys.stderr.write("Warning:show_band must be smaller than samplerate,better be 3/4 of samplerate\n\n")
 
 class ThreadClass(threading.Thread):
     def run(self):
@@ -100,7 +100,9 @@ class my_top_block(gr.top_block):
     def __init__(self):
         gr.top_block.__init__(self)
 
-        usage = "usage: %prog [options] min_freq max_freq"
+        # usage = "usage: %prog [options] min_freq max_freq"
+        usage = "usage: %prog [options] mycenter_freq show_band"
+
         parser = OptionParser(option_class=eng_option, usage=usage)
         parser.add_option("-a", "--args", type="string", default="",
                           help="UHD device device address args [default=%default]")
@@ -118,9 +120,9 @@ class my_top_block(gr.top_block):
         parser.add_option("", "--dwell-delay", type="eng_float",
                           default=0.25, metavar="SECS",
                           help="time to dwell (in seconds) at a given frequency [default=%default]")
-        parser.add_option("-b", "--channel-bandwidth", type="eng_float",
-                          default=6.25e3, metavar="Hz",
-                          help="channel bandwidth of fft bins in Hz [default=%default]")#这个应该是频率分辨度(的而他f)
+        # parser.add_option("-b", "--channel-bandwidth", type="eng_float",
+        #                   default=6.25e3, metavar="Hz",
+        #                   help="channel bandwidth of fft bins in Hz [default=%default]")#这个应该是频率分辨度(的而他f)
         parser.add_option("-l", "--lo-offset", type="eng_float",
                           default=0, metavar="Hz",
                           help="lo_offset in Hz [default=%default]")
@@ -128,7 +130,7 @@ class my_top_block(gr.top_block):
                           default=None, metavar="dB",
                           help="squelch threshold in dB [default=%default]")
         parser.add_option("-F", "--fft-size", type="int", default=None,
-                          help="specify number of FFT bins [default=samp_rate/channel_bw]")
+                          help="specify number of FFT bins [default=1024]")
         parser.add_option("", "--real-time", action="store_true", default=False,
                           help="Attempt to enable real-time scheduling")
 
@@ -137,14 +139,29 @@ class my_top_block(gr.top_block):
             parser.print_help()
             sys.exit(1)
 
-        self.channel_bandwidth = options.channel_bandwidth
+        # self.channel_bandwidth = options.channel_bandwidth
 
-        self.min_freq = eng_notation.str_to_num(args[0])
-        self.max_freq = eng_notation.str_to_num(args[1])
+        myusrprate=options.samp_rate
+        self.fft_size = options.fft_size
+        self.channel_bandwidth = myusrprate/self.fft_size 
 
-        if self.min_freq > self.max_freq:
-            # swap them
-            self.min_freq, self.max_freq = self.max_freq, self.min_freq
+        self.mycenter_freq = eng_notation.str_to_num(args[0])
+        self.show_band     = eng_notation.str_to_num(args[1])
+        if self.show_band >myusrprate:
+            sys.stderr.write("error:show_band must be smaller than samplerate\n")
+            sys.exit(1)
+        show_band=self.show_band 
+        #add
+        temp_varible=show_band/2
+        self.min_freq = self.mycenter_freq - temp_varible
+        self.max_freq = self.mycenter_freq + temp_varible
+
+        args[0]=eng_notation.num_to_str(self.min_freq)
+        args[1]=eng_notation.num_to_str(self.max_freq)
+
+        # if self.min_freq > self.max_freq:
+        #     # swap them
+        #     self.min_freq, self.max_freq = self.max_freq, self.min_freq
 
         if not options.real_time:#尝试使用实时调度
             realtime = False
@@ -174,11 +191,6 @@ class my_top_block(gr.top_block):
 
         self.lo_offset = options.lo_offset
 
-        if options.fft_size is None:
-            self.fft_size = int(self.usrp_rate/self.channel_bandwidth)
-        else:
-            self.fft_size = options.fft_size
-
         self.squelch_threshold = options.squelch_threshold
 
         s2v = blocks.stream_to_vector(gr.sizeof_gr_complex, self.fft_size)#stream_to_vector
@@ -198,12 +210,12 @@ class my_top_block(gr.top_block):
         # Set the freq_step to 75% of the actual data throughput.
         # This allows us to discard the bins on both ends of the spectrum.
 
-        self.freq_step = self.nearest_freq((0.75 * self.usrp_rate), self.channel_bandwidth)#计算samperate，让其是频率分辨率的整数倍（并不等于自己设置的那个）,也是扫频步长
-        self.min_center_freq = self.min_freq + (self.freq_step/2)#算最小中心频率
-        nsteps = math.ceil((self.max_freq - self.min_freq) / self.freq_step)
-        self.max_center_freq = self.min_center_freq + (nsteps * self.freq_step)
+        self.freq_step = self.nearest_freq(show_band, self.channel_bandwidth)#频率分辨率的整数倍（并不等于自己设置的那个）,也是扫频长度
+        self.center_freq = self.min_freq + (self.freq_step/2)#算最小中心频率
+        # nsteps = math.ceil((self.max_freq - self.min_freq) / self.freq_step)
+        # self.center_freq = self.min_center_freq + self.freq_step
 
-        self.next_freq = self.min_center_freq
+        self.next_freq = self.center_freq
 
         tune_delay  = max(0, int(round(options.tune_delay * usrp_rate / self.fft_size)))  # in fft_frames
         dwell_delay = max(1, int(round(options.dwell_delay * usrp_rate / self.fft_size))) # in fft_frames
@@ -213,29 +225,27 @@ class my_top_block(gr.top_block):
         stats = blocks.bin_statistics_f(self.fft_size, self.msgq,
                                         self._tune_callback, tune_delay,#等待时间，扫频时间等可能都在这个函数中实现
                                         dwell_delay)      #构建一个bin统计数据块（可能是计算出下一个的中心频率）
-
+        print "usrp_rate=",self.usrp_rate,"channel_bandwidth（频谱分辨率）=",self.channel_bandwidth,\
+             "fft_size= ",self.fft_size ,"freq_step（扫频长度）=", self.freq_step
         # FIXME leave out the log10 until we speed it up
+
 	#self.connect(self.u, s2v, ffter, c2mag, log, stats)
 	self.connect(self.u, s2v, ffter, c2mag, stats)
-
         if options.gain is None:
             # if no gain was specified, use the mid-point in dB
             g = self.u.get_gain_range()
             options.gain = float(g.start()+g.stop())/2.0
-
         self.set_gain(options.gain)
         print "gain =", options.gain
 
     def set_next_freq(self):
         target_freq = self.next_freq
-        self.next_freq = self.next_freq + self.freq_step
-        if self.next_freq >= self.max_center_freq:
-            self.next_freq = self.min_center_freq
-
+        # self.next_freq = self.next_freq + self.freq_step
+        # if self.next_freq >= self.max_center_freq:
+        #     self.next_freq = self.min_center_freq
         if not self.set_freq(target_freq):
             print "Failed to set frequency to", target_freq
             sys.exit(1)
-
         return target_freq
 
 
@@ -247,7 +257,6 @@ class my_top_block(gr.top_block):
             target_freq: frequency in Hz
         @rypte: bool
         """
-
         r = self.u.set_center_freq(uhd.tune_request(target_freq, rf_freq=(target_freq + self.lo_offset),rf_freq_policy=uhd.tune_request.POLICY_MANUAL))
         if r:
             return True
@@ -271,24 +280,31 @@ def main_loop(tb):
         #print "freq rounded:",freq
         return freq  #不明白
 
-    bin_start = int(tb.fft_size * ((1 - 0.75) / 2))#起始fft采样点的个数
+    bin_start = int(tb.fft_size * ((1 - tb.show_band/tb.usrp_rate) / 2))#起始fft采样点的个数
     bin_stop = int(tb.fft_size - bin_start)#最后fft采样点数
 
     timestamp = 0
     centerfreq = 0
 
+    filename='./timedata.log'
     plt.figure(figsize=(10,4))
     while 1:
 
         # Get the next message sent from the C++ code (blocking call).获取从c++代码发送的下一条消息(阻塞调用)。
         # It contains the center frequency and the mag squared of the fft它包含了fft的中心频率和mag平方
         m = parse_msg(tb.msgq.delete_head())
-        if  m.center_freq>tb.max_freq:
-            continue
+        # if  m.center_freq>tb.max_freq:
+        #     continue
         # m.center_freq is the center frequency at the time of capture
         # m.data are the mag_squared of the fft output即傅立叶变换后的频域数字。
         # m.raw_data is a string that contains the binary floats.
         # You could write this as binary to a file.
+        mydata = open(filename, mode = 'w+')
+        print >> mydata,m.raw_data
+        mydata.close()
+
+
+
 
         # Scanning rate
         if timestamp == 0:
@@ -312,12 +328,18 @@ def main_loop(tb):
 
             Freq_list.append(freq)
             Power_list.append(power_db)
+        #消直流，
 
+
+        #画图
         plt.clf()
-        plt.xlim(Freq_list[0],Freq_list[-1])
+        plt.xlim(Freq_list[0]/1e6,Freq_list[-1]/1e6)
         plt.ylim(-110,-50)
-        plt.plot(Freq_list,Power_list)
-        plt.pause(0.0000001)
+        plt.plot(np.array(Freq_list)/1e6,Power_list)
+        plt.xlabel('MHz')
+        plt.ylabel('dB')
+        plt.title('scan spectrum from %.f MHz to %.f MHz' %(Freq_list[0]/1e6 , Freq_list[-1]/1e6))
+        plt.pause(0.00001)
 
 
 if __name__ == '__main__':

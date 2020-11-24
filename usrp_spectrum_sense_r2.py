@@ -129,7 +129,7 @@ class my_top_block(gr.top_block):
         parser.add_option("-q", "--squelch-threshold", type="eng_float",
                           default=None, metavar="dB",
                           help="squelch threshold in dB [default=%default]")
-        parser.add_option("-F", "--fft-size", type="int", default=None,
+        parser.add_option("-F", "--fft-size", type="int", default=1024,
                           help="specify number of FFT bins [default=1024]")
         parser.add_option("", "--real-time", action="store_true", default=False,
                           help="Attempt to enable real-time scheduling")
@@ -321,7 +321,10 @@ def main_loop(tb):
 
             Freq_list.append(freq)
             Power_list.append(power_db)
+        #消直流，
 
+
+        #画图
         plt.clf()
         plt.xlim(Freq_list[0]/1e6,Freq_list[-1]/1e6)
         plt.ylim(-110,-50)
